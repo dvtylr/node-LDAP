@@ -219,6 +219,13 @@ var LDAP = function(opts) {
         return setCallback(msgid, bind, arguments, fn);
     }
 
+    function saslbind(fn) {
+        var msgid;
+        msgid = binding.saslBind();
+        stats.binds++;
+        return fn();
+    }
+
     function syncpoll() {
         binding.syncpoll();
     }
@@ -345,6 +352,7 @@ var LDAP = function(opts) {
     this.open = open;
     this.simpleBind = simpleBind; //left for back compat.
     this.simplebind = simpleBind;
+    this.saslbind = saslbind;
     this.search = search;
     this.findandbind = findandbind;
     this.getStats = getStats;

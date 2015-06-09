@@ -9,6 +9,10 @@
 
 #include <ldap.h>
 
+// Need Cyrus SASL installed
+// May also be in <sasl.h>?
+#include <sasl/sasl.h>
+
 #ifdef __FreeBSD__
 #include <uuid.h>
 #define uuid_to_string(uu, uuid) {              \
@@ -189,6 +193,7 @@ public:
     NODE_SET_PROTOTYPE_METHOD(t, "getcookie", GetCookie);
     NODE_SET_PROTOTYPE_METHOD(t, "modify", Modify);
     NODE_SET_PROTOTYPE_METHOD(t, "simpleBind", SimpleBind);
+    NODE_SET_PROTOTYPE_METHOD(t, "saslBind", SASLBind);
     NODE_SET_PROTOTYPE_METHOD(t, "rename", Rename);
     NODE_SET_PROTOTYPE_METHOD(t, "add", Add);
     NODE_SET_PROTOTYPE_METHOD(t, "remove", Delete);
@@ -667,6 +672,209 @@ public:
     RETURN_INT(msgid);
   }
 
+
+typedef struct lutil_sasl_defaults_s {
+	char *mech;
+	char *realm;
+	char *authcid;
+	char *passwd;
+	char *authzid;
+	char **resps;
+	int nresps;
+} lutilSASLdefaults;
+
+static int interaction(
+	unsigned flags,
+	sasl_interact_t *interact,
+	lutilSASLdefaults *defaults )
+{
+	const char *dflt = interact->defresult;
+	char input[1024];
+
+	int noecho=0;
+	int challenge=0;
+
+	switch( interact->id ) {
+	case SASL_CB_GETREALM:
+		if( defaults ) dflt = defaults->realm;
+		break;
+	case SASL_CB_AUTHNAME:
+		if( defaults ) dflt = defaults->authcid;
+		break;
+	case SASL_CB_PASS:
+		if( defaults ) dflt = defaults->passwd;
+		noecho = 1;
+		break;
+	case SASL_CB_USER:
+		if( defaults ) dflt = defaults->authzid;
+		break;
+	case SASL_CB_NOECHOPROMPT:
+		noecho = 1;
+		challenge = 1;
+		break;
+	case SASL_CB_ECHOPROMPT:
+		challenge = 1;
+		break;
+	}
+
+	if( dflt && !*dflt ) dflt = NULL;
+
+	if( flags != LDAP_SASL_INTERACTIVE &&
+		( dflt || interact->id == SASL_CB_USER ) )
+	{
+		// goto use_default;
+	}
+
+	if( flags == LDAP_SASL_QUIET ) {
+		/* don't prompt */
+		// return LDAP_OTHER;
+	}
+
+	if( challenge && interact->challenge ) {
+		LJSDEB("Challenge %s:%u: %s\n", interact->challenge );
+	}
+
+	if( dflt ) {
+		LJSDEB("Default %s:%u: %s\n", dflt );
+	}
+
+	LJSDEB("Prompt %s:%u: %s\n", interact->prompt ? interact->prompt : "Interact");
+
+
+	/* input must be empty */
+	interact->result = (dflt && *dflt) ? dflt : "";
+	interact->len = strlen( (const char*)interact->result );
+
+	return LDAP_SUCCESS;
+}
+static int lutil_sasl_interact(
+	LDAP *ld,
+	unsigned flags,
+	void *defaults,
+	void *in )
+{
+	sasl_interact_t *interact = (sasl_interact_t*)in;
+
+	if( ld == NULL ) return LDAP_PARAM_ERROR;
+
+	if( flags == LDAP_SASL_INTERACTIVE ) {
+		LJSDEB("SASL Interaction %s:%u");
+	}
+	LJSDEB("SASL Interaction %s:%u\n");
+
+	while( interact->id != SASL_CB_LIST_END ) {
+		int rc = interaction( flags, interact, (lutilSASLdefaults*)defaults );
+
+		if( rc )  return rc;
+		interact++;
+	}
+	
+	return LDAP_SUCCESS;
+}
+
+  NODE_METHOD(SASLBind)
+  {
+    HandleScope scope;
+    GETOBJ(c);
+    int msgid;
+
+    LJSDEB("BIND: %s:%u %p %p\n", c, c->ld);
+
+    if (c->ld == NULL) {
+      RETURN_INT(LDAP_SERVER_DOWN);
+    }
+
+/*
+    if (args.Length() > 0) {
+      // this is NOT an anonymous bind
+      ENFORCE_ARG_LENGTH(2, "Invalid number of arguments to SimpleBind()");
+      ENFORCE_ARG_STR(0);
+      ENFORCE_ARG_STR(1);
+      ARG_STR(j_binddn, 0);
+      ARG_STR(j_password, 1);
+
+      binddn = strdup(*j_binddn);
+      password = strdup(*j_password);
+    }
+*/
+
+char		*binddn = NULL;
+int rc;
+//unsigned	sasl_flags = LDAP_SASL_AUTOMATIC;
+unsigned	sasl_flags = LDAP_SASL_QUIET;
+char		*sasl_realm = NULL;
+char		*sasl_authc_id = NULL;
+char		*sasl_authz_id = NULL;
+const char		*sasl_mech = NULL;
+char		*sasl_secprops = NULL;
+
+//sasl_mech="GSSAPI";
+
+	int err;
+	//char *matched = NULL;
+	char *info = NULL;
+    void *defaults = NULL;
+    const char *rmech = NULL;
+	LDAPMessage *result = NULL;
+	LDAPControl	**sctrlsp = NULL;
+struct berval   *servercredp = NULL;
+
+/*
+    defaults = lutil_sasl_defaults( ld,
+      sasl_mech,
+      sasl_realm,
+      sasl_authc_id,
+      passwd.bv_val,
+      sasl_authz_id );
+*/
+    do {
+      // rc = ldap_sasl_interactive_bind( c->ld, binddn, sasl_mech,
+      // sctrlsp, NULL, sasl_flags, &LDAPConnection::lutil_sasl_interact, defaults,
+      rc = ldap_sasl_interactive_bind( c->ld, binddn, sasl_mech,
+      	sctrlsp, NULL, sasl_flags, &LDAPConnection::lutil_sasl_interact, defaults,
+       result, &rmech, &msgid );
+
+LJSDEB("SASL RC %s:%u %d\n", rc);
+
+      if ( rc != LDAP_SASL_BIND_IN_PROGRESS )
+        break;
+
+      ldap_msgfree( result );
+
+      if ( ldap_result( c->ld, msgid, LDAP_MSG_ALL, NULL, &result ) == -1 || !result ) {
+        ldap_get_option( c->ld, LDAP_OPT_RESULT_CODE, (void*)&err );
+        ldap_get_option( c->ld, LDAP_OPT_DIAGNOSTIC_MESSAGE, (void*)&info );
+        //tool_perror( "ldap_sasl_interactive_bind",
+         // err, NULL, NULL, info, NULL );
+LJSDEB("SASL ERROR %s:%u %d %s\n", err, info);
+        ldap_memfree( info );
+        //tool_exit( ld, err );
+      }
+
+LJSDEB("Continuing %s:%u\n");
+    } while (rc == LDAP_SASL_BIND_IN_PROGRESS );
+
+    // lutil_sasl_freedefs( defaults );
+
+    if ( rc != LDAP_SUCCESS && rc != LDAP_SASL_BIND_IN_PROGRESS ) {
+      ldap_get_option( c->ld, LDAP_OPT_DIAGNOSTIC_MESSAGE, (void*)&info );
+      // tool_perror( "ldap_sasl_interactive_bind", rc, NULL, NULL, info, NULL );
+LJSDEB("ERROR %s:%u %d %s\n", rc, info);
+      ldap_memfree( info );
+      //tool_exit( ld, rc );
+      LJSDEB("BINDFAIL %s:%u %p %p\n", c, c->ld);
+      close(c);
+    } else {
+LJSDEB("Connected %s:%u %d\n", msgid);
+      LDAPConnection::SetIO(c);
+    }
+
+    //free(binddn);
+    //free(password);
+
+    RETURN_INT(msgid);
+  }
+
   static void SetIO(LDAPConnection *c) {
     int fd;
     uv_poll_t * handle = new uv_poll_t;
@@ -842,7 +1050,9 @@ public:
     }
 
     // now check for any other pending messages....
-    switch(ldap_result(c->ld, LDAP_RES_ANY, LDAP_MSG_ALL, &ldap_tv, &res)) {
+    int rc = ldap_result(c->ld, LDAP_RES_ANY, LDAP_MSG_ALL, &ldap_tv, &res);
+LJSDEB("RC: %s:%u %d\n", rc);
+	switch(rc) {
     case 0:
       LJSDEB("LDi4: %s:%u %p %p\n", c, c->ld);
       return;
@@ -855,6 +1065,7 @@ public:
                         NULL, NULL, NULL, &srv_controls, 0);
       msgid = ldap_msgid(res);
 
+LJSDEB("MT: %s:%u %d\n", ldap_msgtype( res ));
       switch ( ldap_msgtype( res ) ) {
       case LDAP_RES_SEARCH_REFERENCE:
         break;
