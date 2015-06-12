@@ -219,11 +219,19 @@ var LDAP = function(opts) {
         return setCallback(msgid, bind, arguments, fn);
     }
 
-    function saslbind(fn) {
-        var msgid;
-        msgid = binding.saslBind();
+    function saslbind(opts, fn) {
+        if(arguments.length == 1) {
+          fn = opts;
+          opts = {};
+        }
+        var rc = binding.saslBind(opts.mechanism, opts.realm, 
+          opts.binddn, opts.password, opts.user);
         stats.binds++;
-        return fn();
+        var err;
+        if(rc) {
+          err = new LDAPError(binding.err2string(rc));
+        }
+        fn(err);
     }
 
     function syncpoll() {

@@ -672,105 +672,73 @@ public:
     RETURN_INT(msgid);
   }
 
+  //----------- SASL Bind -----------------
 
-typedef struct lutil_sasl_defaults_s {
-	char *mech;
-	char *realm;
-	char *authcid;
-	char *passwd;
-	char *authzid;
-	char **resps;
-	int nresps;
-} lutilSASLdefaults;
+  // Returns a C NULL value if not a string 
+  static inline v8::Local<v8::Value> str_or_null(const v8::Local<v8::Value>& v){
+    return v->IsString() ? v : v8::Local<v8::Value>();
+  }
 
-static int interaction(
-	unsigned flags,
-	sasl_interact_t *interact,
-	lutilSASLdefaults *defaults )
-{
-	const char *dflt = interact->defresult;
-	char input[1024];
+  struct SASLDefaults {
+    SASLDefaults(
+      const v8::Local<v8::Value>& domain,
+      const v8::Local<v8::Value>& dn,
+      const v8::Local<v8::Value>& pw,
+      const v8::Local<v8::Value>& user
+    ) : realm(str_or_null(domain)), 
+      authcid(str_or_null(dn)), 
+      passwd(str_or_null(pw)), 
+      authzid(str_or_null(user))
+    {}
 
-	int noecho=0;
-	int challenge=0;
+    v8::String::Utf8Value realm;
+    v8::String::Utf8Value authcid;
+    v8::String::Utf8Value passwd;
+    v8::String::Utf8Value authzid;
+  };
 
-	switch( interact->id ) {
-	case SASL_CB_GETREALM:
-		if( defaults ) dflt = defaults->realm;
-		break;
-	case SASL_CB_AUTHNAME:
-		if( defaults ) dflt = defaults->authcid;
-		break;
-	case SASL_CB_PASS:
-		if( defaults ) dflt = defaults->passwd;
-		noecho = 1;
-		break;
-	case SASL_CB_USER:
-		if( defaults ) dflt = defaults->authzid;
-		break;
-	case SASL_CB_NOECHOPROMPT:
-		noecho = 1;
-		challenge = 1;
-		break;
-	case SASL_CB_ECHOPROMPT:
-		challenge = 1;
-		break;
-	}
+  static int sasl_set_defaults(
+    unsigned flags,
+    sasl_interact_t *interact,
+    SASLDefaults *defaults
+  )
+  {
+    const char *dflt = interact->defresult;
 
-	if( dflt && !*dflt ) dflt = NULL;
+    switch( interact->id ) {
+    case SASL_CB_GETREALM:
+      dflt = *(defaults->realm);
+      break;
+    case SASL_CB_AUTHNAME:
+      dflt = *(defaults->authcid);
+      break;
+    case SASL_CB_PASS:
+      dflt = *(defaults->passwd);
+      break;
+    case SASL_CB_USER:
+      dflt = *(defaults->authzid);
+      break;
+    }
 
-	if( flags != LDAP_SASL_INTERACTIVE &&
-		( dflt || interact->id == SASL_CB_USER ) )
-	{
-		// goto use_default;
-	}
+  	interact->result = (dflt && *dflt) ? dflt : "";
+    interact->len = strlen((const char*)interact->result);
 
-	if( flags == LDAP_SASL_QUIET ) {
-		/* don't prompt */
-		// return LDAP_OTHER;
-	}
+    return LDAP_SUCCESS;
+  }
 
-	if( challenge && interact->challenge ) {
-		LJSDEB("Challenge %s:%u: %s\n", interact->challenge );
-	}
+  static int sasl_callback(LDAP *ld, unsigned flags, void *defaults, void *in)
+  {
+    sasl_interact_t *interact = (sasl_interact_t*)in;
 
-	if( dflt ) {
-		LJSDEB("Default %s:%u: %s\n", dflt );
-	}
-
-	LJSDEB("Prompt %s:%u: %s\n", interact->prompt ? interact->prompt : "Interact");
-
-
-	/* input must be empty */
-	interact->result = (dflt && *dflt) ? dflt : "";
-	interact->len = strlen( (const char*)interact->result );
-
-	return LDAP_SUCCESS;
-}
-static int lutil_sasl_interact(
-	LDAP *ld,
-	unsigned flags,
-	void *defaults,
-	void *in )
-{
-	sasl_interact_t *interact = (sasl_interact_t*)in;
-
-	if( ld == NULL ) return LDAP_PARAM_ERROR;
-
-	if( flags == LDAP_SASL_INTERACTIVE ) {
-		LJSDEB("SASL Interaction %s:%u");
-	}
-	LJSDEB("SASL Interaction %s:%u\n");
-
-	while( interact->id != SASL_CB_LIST_END ) {
-		int rc = interaction( flags, interact, (lutilSASLdefaults*)defaults );
-
-		if( rc )  return rc;
-		interact++;
-	}
-	
-	return LDAP_SUCCESS;
-}
+    while(interact->id != SASL_CB_LIST_END) {
+      int rc = sasl_set_defaults( flags, interact, (SASLDefaults*)defaults );
+      if(rc)
+        return rc;
+      ++interact;
+    }
+    
+    return LDAP_SUCCESS;
+  }
 
   NODE_METHOD(SASLBind)
   {
@@ -784,96 +752,51 @@ static int lutil_sasl_interact(
       RETURN_INT(LDAP_SERVER_DOWN);
     }
 
-/*
-    if (args.Length() > 0) {
-      // this is NOT an anonymous bind
-      ENFORCE_ARG_LENGTH(2, "Invalid number of arguments to SimpleBind()");
-      ENFORCE_ARG_STR(0);
-      ENFORCE_ARG_STR(1);
-      ARG_STR(j_binddn, 0);
-      ARG_STR(j_password, 1);
+    for(int i = 0; i < 5 ; ++i)
+      if(!args[i]->IsNull() && !args[i]->IsUndefined() && !args[i]->IsString())
+        THROW("Argument must be string");
 
-      binddn = strdup(*j_binddn);
-      password = strdup(*j_password);
-    }
-*/
+    v8::String::Utf8Value sasl_mech(str_or_null(args[0]));
+    SASLDefaults defaults(args[1], args[2], args[3], args[4]);
 
-char		*binddn = NULL;
-int rc;
-//unsigned	sasl_flags = LDAP_SASL_AUTOMATIC;
-unsigned	sasl_flags = LDAP_SASL_QUIET;
-char		*sasl_realm = NULL;
-char		*sasl_authc_id = NULL;
-char		*sasl_authz_id = NULL;
-const char		*sasl_mech = NULL;
-char		*sasl_secprops = NULL;
+    int rc;
+    const char* rmech = NULL;
+    const char* log_mech = NULL;
+    LDAPMessage* result = NULL;
+    LDAPControl** sctrlsp = NULL;
 
-//sasl_mech="GSSAPI";
-
-	int err;
-	//char *matched = NULL;
-	char *info = NULL;
-    void *defaults = NULL;
-    const char *rmech = NULL;
-	LDAPMessage *result = NULL;
-	LDAPControl	**sctrlsp = NULL;
-struct berval   *servercredp = NULL;
-
-/*
-    defaults = lutil_sasl_defaults( ld,
-      sasl_mech,
-      sasl_realm,
-      sasl_authc_id,
-      passwd.bv_val,
-      sasl_authz_id );
-*/
     do {
-      // rc = ldap_sasl_interactive_bind( c->ld, binddn, sasl_mech,
-      // sctrlsp, NULL, sasl_flags, &LDAPConnection::lutil_sasl_interact, defaults,
-      rc = ldap_sasl_interactive_bind( c->ld, binddn, sasl_mech,
-      	sctrlsp, NULL, sasl_flags, &LDAPConnection::lutil_sasl_interact, defaults,
-       result, &rmech, &msgid );
+      rc = ldap_sasl_interactive_bind(c->ld, NULL, *sasl_mech,
+        sctrlsp, NULL, LDAP_SASL_QUIET, &sasl_callback, &defaults, 
+        result, &rmech, &msgid);
 
-LJSDEB("SASL RC %s:%u %d\n", rc);
+        if(rmech && (!log_mech || strcmp(rmech, log_mech))) {
+          LJSDEB("Using SASL mechanism %s:%u %s\n", rmech);
+          log_mech = rmech;
+        }
 
-      if ( rc != LDAP_SASL_BIND_IN_PROGRESS )
-        break;
+        if(rc != LDAP_SASL_BIND_IN_PROGRESS)
+          break;
 
-      ldap_msgfree( result );
+        ldap_msgfree(result);
 
-      if ( ldap_result( c->ld, msgid, LDAP_MSG_ALL, NULL, &result ) == -1 || !result ) {
-        ldap_get_option( c->ld, LDAP_OPT_RESULT_CODE, (void*)&err );
-        ldap_get_option( c->ld, LDAP_OPT_DIAGNOSTIC_MESSAGE, (void*)&info );
-        //tool_perror( "ldap_sasl_interactive_bind",
-         // err, NULL, NULL, info, NULL );
-LJSDEB("SASL ERROR %s:%u %d %s\n", err, info);
-        ldap_memfree( info );
-        //tool_exit( ld, err );
-      }
+        if(ldap_result(c->ld, msgid, LDAP_MSG_ALL, NULL, &result) == -1 
+          || !result) 
+        {
+          ldap_get_option( c->ld, LDAP_OPT_RESULT_CODE, &rc);
+          break;
+        }
+    } while(rc == LDAP_SASL_BIND_IN_PROGRESS);
 
-LJSDEB("Continuing %s:%u\n");
-    } while (rc == LDAP_SASL_BIND_IN_PROGRESS );
-
-    // lutil_sasl_freedefs( defaults );
-
-    if ( rc != LDAP_SUCCESS && rc != LDAP_SASL_BIND_IN_PROGRESS ) {
-      ldap_get_option( c->ld, LDAP_OPT_DIAGNOSTIC_MESSAGE, (void*)&info );
-      // tool_perror( "ldap_sasl_interactive_bind", rc, NULL, NULL, info, NULL );
-LJSDEB("ERROR %s:%u %d %s\n", rc, info);
-      ldap_memfree( info );
-      //tool_exit( ld, rc );
-      LJSDEB("BINDFAIL %s:%u %p %p\n", c, c->ld);
+    if(rc != LDAP_SUCCESS) 
       close(c);
-    } else {
-LJSDEB("Connected %s:%u %d\n", msgid);
+    else
       LDAPConnection::SetIO(c);
-    }
 
-    //free(binddn);
-    //free(password);
-
-    RETURN_INT(msgid);
+    RETURN_INT(rc);
   }
+
+  //----------- End SASL Bind --------------
 
   static void SetIO(LDAPConnection *c) {
     int fd;
