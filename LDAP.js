@@ -224,8 +224,9 @@ var LDAP = function(opts) {
           fn = opts;
           opts = {};
         }
-        var rc = binding.saslBind(opts.mechanism, opts.realm, 
-          opts.binddn, opts.password, opts.user);
+        var rc = binding.saslBind(opts.mechanism, 
+          opts.user, opts.password, opts.realm, opts.proxy_user, 
+          opts.security_properties);
         stats.binds++;
         var err;
         if(rc) {

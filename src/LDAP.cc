@@ -681,20 +681,21 @@ public:
 
   struct SASLDefaults {
     SASLDefaults(
-      const v8::Local<v8::Value>& domain,
-      const v8::Local<v8::Value>& dn,
+      const v8::Local<v8::Value>& usr,
       const v8::Local<v8::Value>& pw,
-      const v8::Local<v8::Value>& user
-    ) : realm(str_or_null(domain)), 
-      authcid(str_or_null(dn)), 
-      passwd(str_or_null(pw)), 
-      authzid(str_or_null(user))
+      const v8::Local<v8::Value>& rlm,
+      const v8::Local<v8::Value>& proxy
+    ) : 
+      user(str_or_null(usr)), 
+      password(str_or_null(pw)),
+      realm(str_or_null(rlm)), 
+      proxy_user(str_or_null(proxy))
     {}
 
+    v8::String::Utf8Value user;
+    v8::String::Utf8Value password;
     v8::String::Utf8Value realm;
-    v8::String::Utf8Value authcid;
-    v8::String::Utf8Value passwd;
-    v8::String::Utf8Value authzid;
+    v8::String::Utf8Value proxy_user;
   };
 
   static int sasl_set_defaults(
@@ -704,20 +705,31 @@ public:
   )
   {
     const char *dflt = interact->defresult;
+    const char *type = 0;
+    const char* display = 0;
 
     switch( interact->id ) {
-    case SASL_CB_GETREALM:
-      dflt = *(defaults->realm);
-      break;
     case SASL_CB_AUTHNAME:
-      dflt = *(defaults->authcid);
+      display = dflt = *(defaults->user);
+      type = "authentication user";
       break;
     case SASL_CB_PASS:
-      dflt = *(defaults->passwd);
+      dflt = *(defaults->password);
+      type = "password";
+      break;
+    case SASL_CB_GETREALM:
+      display = dflt = *(defaults->realm);
+      type = "realm"; 
       break;
     case SASL_CB_USER:
-      dflt = *(defaults->authzid);
+      display = dflt = *(defaults->proxy_user);
+      type = "proxy (authorization) user";
       break;
+    }
+
+    if(type) {
+     LJSDEB("Default %s:%u for %s: %s\n", type, 
+      display ? display : dflt ? "****" : "No value provided");
     }
 
   	interact->result = (dflt && *dflt) ? dflt : "";
@@ -731,7 +743,7 @@ public:
     sasl_interact_t *interact = (sasl_interact_t*)in;
 
     while(interact->id != SASL_CB_LIST_END) {
-      int rc = sasl_set_defaults( flags, interact, (SASLDefaults*)defaults );
+      int rc = sasl_set_defaults(flags, interact, (SASLDefaults*)defaults);
       if(rc)
         return rc;
       ++interact;
@@ -746,20 +758,28 @@ public:
     GETOBJ(c);
     int msgid;
 
-    LJSDEB("BIND: %s:%u %p %p\n", c, c->ld);
+    LJSDEB("SASL BIND: %s:%u %p %p\n", c, c->ld);
 
     if (c->ld == NULL) {
       RETURN_INT(LDAP_SERVER_DOWN);
     }
 
-    for(int i = 0; i < 5 ; ++i)
+    for(int i = 0; i < 6 ; ++i)
       if(!args[i]->IsNull() && !args[i]->IsUndefined() && !args[i]->IsString())
         THROW("Argument must be string");
 
     v8::String::Utf8Value sasl_mech(str_or_null(args[0]));
     SASLDefaults defaults(args[1], args[2], args[3], args[4]);
+    v8::String::Utf8Value sec_props(str_or_null(args[5]));
 
     int rc;
+
+    if(*sec_props) {
+      rc = ldap_set_option(c->ld, LDAP_OPT_X_SASL_SECPROPS, *sec_props);
+      if(rc != LDAP_SUCCESS)
+        RETURN_INT(rc);
+    }
+
     const char* rmech = NULL;
     const char* log_mech = NULL;
     LDAPMessage* result = NULL;
