@@ -46,6 +46,15 @@ install the uuid-dev package).
 
 You will also require the LDAP Development Libraries (on Ubuntu, `sudo apt-get install libldap2-dev`)
 
+For SASL/GSSAPI/Kerberos support the Cyrus SASL libraries need to be installed
+and OpenLDAP needs to be built with SASL support.  To install the LDAP module
+with SASL support install with the following command:
+
+	CXXFLAGS=-DNODE_LDAP_SASL npm install LDAP
+
+Or if already installed rebuild with:
+
+	CXXFLAGS=-DNODE_LDAP_SASL node-gyp rebuild
 
 API
 ===
@@ -103,6 +112,31 @@ bind_options = {
     password: ''
 }
 ```
+
+ldap.saslbind()
+---------------
+Upgrade the existing anonymous bind to an authenticated bind using SASL.
+
+    ldap.saslbind([bind_options,] function(err));
+
+Note that this method is synchronous. Options are: 
+
+* mechanism - If not provided SASL library will select based on the best 
+  mechanism available on the server.
+* user - Authentication user if required by mechanism
+* password - Authentication user's password if required by mechanism
+* realm - Non-default SASL realm if required by mechanism
+* proxy_user - Authorization (proxy) user if supported by mechanism
+* security_properties - Optional SASL security properties
+
+All parameters are optional.  For example a GSSAPI (Kerberos) bind can be
+initiated as follows:
+
+```
+	ldap.saslbind(function(err) { if(err) throw err; });
+```
+
+For details refer to the [SASL documentation](http://cyrusimap.org/docs/cyrus-sasl).
 
 ldap.search()
 -------------
