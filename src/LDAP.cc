@@ -11,7 +11,9 @@
 
 // Need Cyrus SASL installed
 // May also be in <sasl.h>?
+#ifdef NODE_LDAP_SASL
 #include <sasl/sasl.h>
+#endif
 
 #ifdef __FreeBSD__
 #include <uuid.h>
@@ -674,6 +676,8 @@ public:
 
   //----------- SASL Bind -----------------
 
+#ifdef NODE_LDAP_SASL
+
   // Returns a C NULL value if not a string 
   static inline v8::Local<v8::Value> str_or_null(const v8::Local<v8::Value>& v){
     return v->IsString() ? v : v8::Local<v8::Value>();
@@ -815,6 +819,15 @@ public:
 
     RETURN_INT(rc);
   }
+
+#else
+
+  NODE_METHOD(SASLBind)
+  {
+    THROW("LDAP module was not built with SASL support");
+  }
+
+#endif
 
   //----------- End SASL Bind --------------
 
