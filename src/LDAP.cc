@@ -1006,9 +1006,7 @@ public:
     }
 
     // now check for any other pending messages....
-    int rc = ldap_result(c->ld, LDAP_RES_ANY, LDAP_MSG_ALL, &ldap_tv, &res);
-LJSDEB("RC: %s:%u %d\n", rc);
-	switch(rc) {
+    switch(ldap_result(c->ld, LDAP_RES_ANY, LDAP_MSG_ALL, &ldap_tv, &res)) {
     case 0:
       LJSDEB("LDi4: %s:%u %p %p\n", c, c->ld);
       return;
@@ -1021,7 +1019,6 @@ LJSDEB("RC: %s:%u %d\n", rc);
                         NULL, NULL, NULL, &srv_controls, 0);
       msgid = ldap_msgid(res);
 
-LJSDEB("MT: %s:%u %d\n", ldap_msgtype( res ));
       switch ( ldap_msgtype( res ) ) {
       case LDAP_RES_SEARCH_REFERENCE:
         break;
